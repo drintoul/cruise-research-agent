@@ -1,0 +1,7 @@
+.git
+.env
+qdrant-data
+documents
+__pycache__
+*.pyc
+pill_*.log

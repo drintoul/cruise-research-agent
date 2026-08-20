@@ -1,0 +1,8 @@
+chainlit==2.11.1
+langgraph==1.2.11
+langgraph-prebuilt==1.1.0
+langchain-ollama==1.1.0
+qdrant-client==1.19.0
+httpx==0.28.1
+pypdf==6.16.1
+beautifulsoup4>=4.12,<5

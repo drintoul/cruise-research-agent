@@ -1,0 +1,5 @@
+[UI]
+name = "Basic Agentic Research Agent"
+description = "Portfolio demonstration of agentic research with RAG, SearXNG search, and Firecrawl scrape/crawl."
+
+custom_css = "/public/custom.css"

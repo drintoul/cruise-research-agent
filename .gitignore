@@ -1,0 +1,8 @@
+.env
+qdrant-data/
+documents/**/*.pdf
+documents/**/*.html
+documents/**/*.htm
+__pycache__/
+*.pyc
+pill_*.log
