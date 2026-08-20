@@ -3,19 +3,19 @@
 from __future__ import annotations
 from datetime import datetime
 
+import json
 import logging
 import os
 from typing import Literal
 
 import chainlit as cl
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from tools import RESEARCH_TOOLS, search_knowledge_base, search_web, scrape_url
 from langchain_core.runnables import RunnableConfig
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
-
-from tools import RESEARCH_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +114,13 @@ RESEARCH RULES
 - When asked to verify or cross-check public information, you must use
   search_web and scrape_url to retrieve live pages. Do not use Qdrant
   source_url metadata as if it were a verified public source.
+- You may only cite a public web source if scrape_url successfully returned
+  content from that exact URL. Do not cite a URL that search results merely
+  mentioned, that you inferred from a domain pattern, or that returned a 4xx/5xx
+  error. If the live page is unavailable, say so and do not invent a URL.
+- The exact URL you cite must be the `url` field returned by `scrape_url`. Do not
+  use relative links, absolute links, or any other URLs that only appear inside
+  the body of a scraped page.
 - For RAG evidence, cite the document title as plain text only. Do not include
   source paths, source URLs, or any markdown link formatting for RAG documents.
   Examples of RAG citations to avoid: [Royal Caribbean Suite Class FAQ.pdf]
@@ -198,12 +205,113 @@ def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     return END
 
 
+def _focused_web_query(user_text: str, domain: str, provider: str) -> str:
+    """Build a concise, provider-aware SearXNG query."""
+    t = user_text.lower()
+    price_keywords = [
+        "price",
+        "prices",
+        "package",
+        "packages",
+        "cost",
+        "deal",
+        "deals",
+        "offer",
+        "offers",
+        "promotion",
+        "promotions",
+    ]
+    suite_keywords = ["suite", "suites", "benefit", "benefits", "perk", "perks"]
+    if any(k in t for k in price_keywords):
+        if provider == "Royal Caribbean":
+            return f"site:{domain} cruise-deals"
+        return f"site:{domain} cruise deals promotions prices"
+    if any(k in t for k in suite_keywords):
+        if provider == "Royal Caribbean":
+            return f"site:{domain} Royal Suite Class benefits Star Sky Sea"
+        return f"site:{domain} suite benefits"
+    return f"site:{domain} {user_text}"
+
+
+async def deterministic_research(state: AgentState) -> dict:
+    """For time-sensitive or verification queries, run RAG, search, and scrape deterministically.
+
+    This bypasses the LLM's tool-routing decisions for queries that must be
+    grounded in a live web page. It forces a search_web + scrape_url sequence
+    and reserves the final LLM call for synthesis only.
+    """
+    user_text = next(
+        (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        "",
+    )
+    user_lower = user_text.lower()
+    provider = ""
+    domain = ""
+    if "royal caribbean" in user_lower:
+        provider = "Royal Caribbean"
+        domain = "royalcaribbean.com"
+    elif "princess" in user_lower:
+        provider = "Princess Cruises"
+        domain = "princess.com"
+
+    # 1. Retrieve from knowledge base and discover public sources
+    kb_result = await search_knowledge_base.ainvoke(
+        {"query": user_text, "provider": provider, "limit": 5}
+    )
+    web_query = _focused_web_query(user_text, domain, provider)
+    web_result = await search_web.ainvoke(
+        {"query": web_query, "limit": 5, "time_range": "year"}
+    )
+
+    # 2. Scrape the top plausible results until enough succeed
+    scraped = []
+    try:
+        web_data = json.loads(web_result)
+        for item in web_data.get("results", []):
+            if len(scraped) >= 3:
+                break
+            url = item.get("url", "")
+            if not url:
+                continue
+            try:
+                page = await scrape_url.ainvoke({"url": url})
+                scraped.append(page)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if not scraped:
+        scraped.append("No public page could be successfully scraped.")
+
+    new_messages = state["messages"] + [
+        ToolMessage(content=kb_result, tool_call_id="det-kb-1", name="search_knowledge_base"),
+        ToolMessage(content=web_result, tool_call_id="det-web-1", name="search_web"),
+    ]
+    for i, page in enumerate(scraped, start=1):
+        new_messages.append(
+            ToolMessage(content=page, tool_call_id=f"det-scrape-{i}", name="scrape_url")
+        )
+
+    return {"messages": new_messages, "llm_calls": MAX_AGENT_LLM_CALLS - 1}
+
+
+def route_start(state: AgentState) -> Literal["deterministic_research", "agent"]:
+    """Route verification / current-info queries through deterministic research."""
+    user_text = " ".join(m.content for m in state["messages"] if isinstance(m, HumanMessage)).lower()
+    if any(k in user_text for k in ["verify", "current", "price", "prices", "packages", "cost"]):
+        return "deterministic_research"
+    return "agent"
+
+
 builder = StateGraph(AgentState)
 
 builder.add_node("agent", call_model)
 builder.add_node("tools", tool_node)
+builder.add_node("deterministic_research", deterministic_research)
 
-builder.add_edge(START, "agent")
+builder.add_conditional_edges(START, route_start, ["deterministic_research", "agent"])
+builder.add_edge("deterministic_research", "agent")
 builder.add_conditional_edges(
     "agent",
     should_continue,

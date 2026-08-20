@@ -95,8 +95,8 @@ reaction_on_message_received = false
 
 [UI]
 # Name of the assistant.
-name = "Basic Agentic Research Agent"
-description = "Agentic RAG and web research portfolio demonstration."
+name = "Cruise Research Agent — Demo"
+description = "A public demo of a cruise research assistant for Princess Cruises and Royal Caribbean using RAG and live web research."
 
 # default_theme = "dark"
 

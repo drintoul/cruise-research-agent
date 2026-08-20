@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import os
 import socket
 import uuid
@@ -307,6 +308,10 @@ async def scrape_url(url: str) -> str:
     metadata = data.get("metadata") or {}
     markdown = data.get("markdown") or ""
 
+    # Strip markdown link targets so the model cannot accidentally cite relative
+    # or broken links that appear inside the page body instead of the scraped URL.
+    markdown = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", markdown)
+
     return _json(
         {
             "success": body.get("success", True),
@@ -317,6 +322,11 @@ async def scrape_url(url: str) -> str:
             "description": metadata.get("description"),
             "published_at": metadata.get("publishedTime")
             or metadata.get("published_at"),
+            "citation": (
+                "Cite this page using the exact URL above. Do not use any URLs "
+                "that only appear inside the page body unless scrape_url was also "
+                "called on that exact URL."
+            ),
             "markdown": markdown,
         }
     )

@@ -220,6 +220,7 @@ Grounded answer
 The research agent is instructed to:
 
 - prefer official and primary sources;
+- for current or verifiable questions about Princess Cruises or Royal Caribbean, restrict public web searches to the vendor's own site (`site:princess.com` or `site:royalcaribbean.com`) so third-party blogs and booking sites are not used as evidence;
 - use SearXNG for discovery;
 - retrieve the underlying webpage with Firecrawl before relying on it as evidence;
 - prefer `scrape_url` over `crawl_site`;

@@ -252,6 +252,8 @@ Firecrawl scrape
 main page content
 ```
 
+For current or verifiable questions about Princess Cruises or Royal Caribbean, the deterministic research branch restricts `search_web` to the cruise line's own domain (`site:princess.com` or `site:royalcaribbean.com`). This avoids third-party blogs and booking sites and improves source quality.
+
 ### Firecrawl scrape
 
 For a selected public URL, the agent uses Firecrawl `/v2/scrape` with:
@@ -512,6 +514,7 @@ Do not commit proprietary supplier documents, Qdrant storage, API credentials, p
 This repository is deliberately not a production-complete research platform. In particular:
 
 - The RAG corpus is limited to Princess Cruises and Royal Caribbean.
+- Web research for current or verifiable details is restricted to the cruise line's own domain (`princess.com`, `royalcaribbean.com`) to avoid third-party sources.
 - The source documents are not distributed with the repository.
 - The graph is a basic bounded tool-calling graph.
 - There is no OCR fallback for scanned PDFs.
