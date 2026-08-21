@@ -1,6 +1,6 @@
 # Cruise Research Agent — Demo
 
-This is a **public demo** of a cruise research assistant, not an exhaustive production solution. It is built to answer questions about **Princess Cruises** and **Royal Caribbean** using a small curated knowledge base plus optional live web research.
+This is a **public demo** of a cruise research assistant, not an exhaustive production solution. It is built to answer questions about **Princess Cruises** and **Royal Caribbean** using a small, curated subset of publicly available reference documents plus optional live web research.
 
 ### Limitations
 - The local knowledge base covers only **Princess Cruises** and **Royal Caribbean**.

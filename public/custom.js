@@ -1,75 +1,63 @@
-(() => {
-  const IMAGE_NAME = "langgraph-architecture.png";
 
-  function isLangGraphImage(element) {
-    if (!(element instanceof HTMLImageElement)) {
-      return false;
+(function () {
+  const DISCLAIMER = "A public demo using a small, curated subset of Princess Cruises and Royal Caribbean reference documents. Not an exhaustive production solution.";
+
+  console.log("[custom.js] loaded");
+
+  function addDisclaimer() {
+    if (document.getElementById("cruise-demo-disclaimer")) {
+      return;
     }
 
-    const src = element.getAttribute("src") || "";
+    const p = document.createElement("p");
+    p.id = "cruise-demo-disclaimer";
+    p.textContent = DISCLAIMER;
+    p.style.cssText =
+      "text-align: center; color: #94a3b8; font-size: 0.9rem; margin: 0.5rem auto 1.25rem auto; max-width: 32rem; padding: 0 1rem; line-height: 1.4;";
 
-    return src.includes(IMAGE_NAME);
-  }
-
-  document.addEventListener(
-    "click",
-    (event) => {
-      const image = event.target.closest?.("img");
-
-      if (!isLangGraphImage(image)) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const url = new URL(
-        "/public/langgraph-architecture.png",
-        window.location.origin
-      );
-
-      window.open(url.href, "_blank", "noopener,noreferrer");
-    },
-    true
-  );
-
-  function decorateImages() {
-    document.querySelectorAll("img").forEach((image) => {
-      if (!isLangGraphImage(image)) {
-        return;
-      }
-
-      image.style.cursor = "zoom-in";
-      image.title = "Click to open full-size diagram";
-      image.setAttribute("role", "button");
-      image.setAttribute("tabindex", "0");
-    });
-  }
-
-  document.addEventListener("keydown", (event) => {
-    if (
-      (event.key === "Enter" || event.key === " ") &&
-      isLangGraphImage(event.target)
-    ) {
-      event.preventDefault();
-
-      window.open(
-        new URL(
-          "/public/langgraph-architecture.png",
-          window.location.origin
-        ).href,
-        "_blank",
-        "noopener,noreferrer"
-      );
+    // Try to place the text just below the cruise ship logo.
+    const logo = document.querySelector('img[src*="cruise-ship"]');
+    if (logo && logo.parentElement) {
+      logo.parentElement.insertBefore(p, logo.nextSibling);
+      console.log("[custom.js] disclaimer inserted under logo");
+      return;
     }
-  });
 
-  decorateImages();
+    // Fall back to inserting just above the message composer.
+    const composer = document.querySelector('textarea[placeholder*="Type your message"]');
+    if (composer && composer.parentElement) {
+      composer.parentElement.insertBefore(p, composer);
+      console.log("[custom.js] disclaimer inserted above composer");
+      return;
+    }
 
-  const observer = new MutationObserver(decorateImages);
+    // Last resort: prepend to body so it is at least visible on the landing page.
+    document.body.prepend(p);
+    console.log("[custom.js] disclaimer prepended to body");
+  }
 
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
-  });
+  function tryAddDisclaimer() {
+    if (document.getElementById("cruise-demo-disclaimer")) {
+      return;
+    }
+    addDisclaimer();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tryAddDisclaimer);
+  } else {
+    tryAddDisclaimer();
+  }
+
+  const observer = new MutationObserver(tryAddDisclaimer);
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Chainlit's landing screen renders after load, so keep checking briefly.
+  let retries = 0;
+  const interval = setInterval(() => {
+    tryAddDisclaimer();
+    if (document.getElementById("cruise-demo-disclaimer") || ++retries > 10) {
+      clearInterval(interval);
+    }
+  }, 500);
 })();

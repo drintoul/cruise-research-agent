@@ -96,7 +96,7 @@ reaction_on_message_received = false
 [UI]
 # Name of the assistant.
 name = "Cruise Research Agent — Demo"
-description = "A public demo of a cruise research assistant for Princess Cruises and Royal Caribbean using RAG and live web research."
+description = "A public demo using a small, curated subset of Princess Cruises and Royal Caribbean reference documents, plus optional live web research. Not an exhaustive production solution."
 
 # default_theme = "dark"
 
@@ -132,7 +132,7 @@ cot = "tool_call"
 
 # Specify a JavaScript file that can be used to customize the user interface.
 # The JavaScript file can be served from the public directory.
-custom_js = "/public/custom.js"
+custom_js = "/public/custom.js?v=3"
 
 # The style of alert boxes. Can be "classic" or "modern".
 alert_style = "classic"

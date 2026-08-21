@@ -6,6 +6,8 @@ from datetime import datetime
 import json
 import logging
 import os
+import re
+import uuid
 from typing import Literal
 
 import chainlit as cl
@@ -107,7 +109,7 @@ RESEARCH RULES
 - If evidence is incomplete, say what could not be established.
 - If credible sources conflict, identify the conflict.
 - Distinguish sourced facts from inference.
-- Cite material public claims with the underlying source URL.
+- Cite every factual claim with a source. Provide the source as a clickable markdown link using the actual URL. For web evidence, the link must be the exact `url` returned by `scrape_url`. For knowledge-base evidence, the link must be the `source_url` field from the RAG result when it is an HTTP/HTTPS URL. If the RAG result has no usable URL, cite the document title.
 - For current prices, promotions, packages, availability, or other time-sensitive
   facts, prefer web tools over the knowledge base. The knowledge base is
   intentionally not a live price list.
@@ -121,13 +123,32 @@ RESEARCH RULES
 - The exact URL you cite must be the `url` field returned by `scrape_url`. Do not
   use relative links, absolute links, or any other URLs that only appear inside
   the body of a scraped page.
-- For RAG evidence, cite the document title as plain text only. Do not include
-  source paths, source URLs, or any markdown link formatting for RAG documents.
-  Examples of RAG citations to avoid: [Royal Caribbean Suite Class FAQ.pdf]
-  or [Princess Full Suite Guide](documents/...).
+- For RAG evidence, include the document title and, whenever the RAG result has an
+  HTTP/HTTPS `source_url`, provide that URL as a clickable markdown link. Do not
+  use local file paths or invented URLs.
 - Do not cite SearXNG itself when the underlying source page was retrieved.
+- For Princess Cruises or Royal Caribbean questions, if the knowledge base does
+  not contain the requested information, use search_web and scrape_url to find
+  it from official or other authoritative public sources. Do not stop at the
+  knowledge base just because the answer is missing locally. If the retrieved
+  documents are off-topic or incomplete, immediately search the web before
+  concluding the answer is missing.
 - Do not reveal hidden chain-of-thought or private reasoning.
 - Keep the final response focused on the user's actual question.
+- Be concise. Answer with only the information the user asked for; avoid
+  producing exhaustive spec sheets, lists, or long background unless requested.
+- If the question can be answered with a single number, sentence, or comparison,
+  provide that and the source ONLY. Do not include related facts, history,
+  amenities, or other specifications.
+- ALWAYS attempt to answer the user's question using the evidence you have. Do
+  not refuse or say the answer is "not explicitly found" just because the
+  evidence is partial, a current price is not listed, or a single number is
+  missing. Synthesize the best available answer, be specific about what you
+  found, and clearly state any uncertainty or missing details.
+- For current prices, promotions, packages, or availability, if the exact figure
+  is not in the evidence, provide the most recent price range, tier, or estimate
+  you can find and cite the source. Do not fall back to a generic "check the
+  website" response unless the scraped page truly has no relevant pricing.
 """.strip()
 
 
@@ -152,6 +173,14 @@ llm = ChatOllama(
     num_ctx=OLLAMA_NUM_CTX,
 )
 
+condense_llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_BASE_URL,
+    temperature=0,
+    num_ctx=OLLAMA_NUM_CTX,
+    num_predict=800,
+)
+
 llm_with_tools = llm.bind_tools(RESEARCH_TOOLS)
 tool_node = ToolNode(RESEARCH_TOOLS)
 
@@ -173,6 +202,38 @@ async def call_model(state: AgentState) -> dict:
 
     # Reserve the final allowed model call for synthesis without tools.
     force_final = llm_calls >= (MAX_AGENT_LLM_CALLS - 1)
+
+    # If the most recent tool was the knowledge base, always fall through to a
+    # live web search before the model answers, so the answer is grounded in
+    # current public sources and not just the local Qdrant index.
+    last_tool = next(
+        (m for m in reversed(messages) if isinstance(m, ToolMessage)),
+        None,
+    )
+    if (
+        not force_final
+        and last_tool
+        and getattr(last_tool, "name", "") == "search_knowledge_base"
+    ):
+        user_text = next(
+            (m.content for m in messages if isinstance(m, HumanMessage)),
+            "",
+        )
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "search_web",
+                            "args": {"query": user_text},
+                            "id": f"force_web_{uuid.uuid4().hex[:8]}",
+                        }
+                    ],
+                )
+            ],
+            "llm_calls": llm_calls + 1,
+        }
 
     if force_final:
         messages.append(
@@ -221,8 +282,38 @@ def _focused_web_query(user_text: str, domain: str, provider: str) -> str:
         "promotion",
         "promotions",
     ]
+    dim_keywords = [
+        "length",
+        "long",
+        "longer",
+        "meter",
+        "meters",
+        "metre",
+        "metres",
+        "feet",
+        "foot",
+        "dimensions",
+        "tonnage",
+        "gross tonnage",
+        "beam",
+        "draft",
+        "speed",
+    ]
     suite_keywords = ["suite", "suites", "benefit", "benefits", "perk", "perks"]
     if any(k in t for k in price_keywords):
+        # Strip generic question/price words and the provider name so the query
+        # focuses on the specific product or package the user is asking about.
+        generic = re.sub(
+            r"\b(how|what|are|does|is|the|much|cost|price|prices|pricing|package|packages|current|for|per|day|do|of|a|and|or|on|in|at|to|from|\?)\b|[^\w\s]",
+            " ",
+            t,
+        )
+        generic = re.sub(r"\s+", " ", generic).strip()
+        if provider:
+            generic = re.sub(re.escape(provider.lower()), "", generic).strip()
+            generic = re.sub(r"\s+", " ", generic).strip()
+        if generic:
+            return f"site:{domain} {generic}"
         if provider == "Royal Caribbean":
             return f"site:{domain} cruise-deals"
         return f"site:{domain} cruise deals promotions prices"
@@ -230,6 +321,26 @@ def _focused_web_query(user_text: str, domain: str, provider: str) -> str:
         if provider == "Royal Caribbean":
             return f"site:{domain} Royal Suite Class benefits Star Sky Sea"
         return f"site:{domain} suite benefits"
+    if any(k in t for k in dim_keywords):
+        # Strip question words (but keep "of" and "the" for ship names) and
+        # search the wider web; vendor pages rarely list static ship dimensions.
+        cleaned = re.sub(
+            r"\b(how|what|is|in|long|length|feet|meters?|metres?|dimensions?|tonnage|gross|beam|draft|speed|\?)\b|[^\w\s]",
+            " ",
+            t,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned:
+            return f"{cleaned} ship facts specifications"
+    if not domain:
+        # Unknown provider: search the open web with a cleaned query.
+        generic = re.sub(
+            r"\b(how|what|are|does|is|the|much|cost|price|prices|pricing|package|packages|current|for|per|day|do|of|a|and|or|on|in|at|to|from|\?)\b|[^\w\s]",
+            " ",
+            t,
+        )
+        generic = re.sub(r"\s+", " ", generic).strip()
+        return generic or user_text
     return f"site:{domain} {user_text}"
 
 
@@ -253,14 +364,24 @@ async def deterministic_research(state: AgentState) -> dict:
     elif "princess" in user_lower:
         provider = "Princess Cruises"
         domain = "princess.com"
+    elif " of the seas" in user_lower or user_lower.endswith(" of the seas"):
+        provider = "Royal Caribbean"
+        domain = "royalcaribbean.com"
 
     # 1. Retrieve from knowledge base and discover public sources
     kb_result = await search_knowledge_base.ainvoke(
         {"query": user_text, "provider": provider, "limit": 5}
     )
+    # Ship dimensions/specs are static facts; do not restrict to the past year.
+    dim_keywords = {
+        "length", "long", "longer", "meter", "meters", "metre", "metres",
+        "feet", "foot", "dimensions", "tonnage", "gross tonnage", "beam",
+        "draft", "speed",
+    }
+    time_range = "" if any(k in user_lower for k in dim_keywords) else "year"
     web_query = _focused_web_query(user_text, domain, provider)
     web_result = await search_web.ainvoke(
-        {"query": web_query, "limit": 5, "time_range": "year"}
+        {"query": web_query, "limit": 5, "time_range": time_range}
     )
 
     # 2. Scrape the top plausible results until enough succeed
@@ -297,9 +418,36 @@ async def deterministic_research(state: AgentState) -> dict:
 
 
 def route_start(state: AgentState) -> Literal["deterministic_research", "agent"]:
-    """Route verification / current-info queries through deterministic research."""
+    """Route verification, current-info, and ship-dimension queries through deterministic research."""
     user_text = " ".join(m.content for m in state["messages"] if isinstance(m, HumanMessage)).lower()
-    if any(k in user_text for k in ["verify", "current", "price", "prices", "packages", "cost"]):
+    dim_keywords = [
+        "length",
+        "long",
+        "longer",
+        "meter",
+        "meters",
+        "metre",
+        "metres",
+        "feet",
+        "foot",
+        "dimensions",
+        "tonnage",
+        "gross tonnage",
+        "beam",
+        "draft",
+        "speed",
+    ]
+    trigger_keywords = [
+        "verify",
+        "current",
+        "price",
+        "prices",
+        "packages",
+        "cost",
+        "suite",
+        "suites",
+    ] + dim_keywords
+    if any(k in user_text for k in trigger_keywords):
         return "deterministic_research"
     return "agent"
 
@@ -446,6 +594,33 @@ async def on_message(message: cl.Message) -> None:
                 "The research workflow completed but did not produce a textual "
                 "answer."
             )
+
+        # Condense verbose final answers for short, direct questions.
+        user_text = message.content.strip()
+        if len(content) > 600 and len(user_text.split()) <= 15:
+            condense_prompt = (
+                "You are a response condenser. Rewrite the following answer as a "
+                "concise, direct response to the user's question. Use at most "
+                "two or three short sentences for the body. You MUST keep any "
+                "source URLs from the original answer and render them as "
+                "clickable markdown links. If the original answer contains "
+                "multiple source URLs, list them in a short 'Sources:' section. "
+                "Do NOT remove URLs, do NOT add URLs that are not in the "
+                "original answer, do NOT invent URLs, and do NOT use phrases "
+                "like 'linked above' or 'as shown above'. Do NOT include lists, "
+                "history, amenities, or other details the user did not ask for."
+            )
+            condensed = await condense_llm.ainvoke(
+                [
+                    SystemMessage(condense_prompt),
+                    HumanMessage(
+                        content=f"Question: {user_text}\n\nAnswer to condense:\n{content}"
+                    ),
+                ]
+            )
+            condensed_text = _message_content_to_text(condensed.content).strip()
+            if condensed_text:
+                content = condensed_text
 
         await cl.Message(content=content).send()
 

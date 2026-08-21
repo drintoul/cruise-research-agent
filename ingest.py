@@ -1,7 +1,7 @@
 """Periodic local-document ingestion for the travel knowledge base.
 
 Supported files under DOCUMENTS_DIR are discovered recursively:
-- PDF: text extracted with pypdf, preserving page provenance.
+- PDF: text extracted with pypdf, with an OCR fallback for image-only/scanned pages.
 - HTML/HTM: main content extracted locally with BeautifulSoup, preserving
   section/heading provenance.
 
@@ -35,6 +35,8 @@ from typing import Iterable
 
 from bs4 import BeautifulSoup, Tag
 from pypdf import PdfReader
+from pdf2image import convert_from_path
+from pytesseract import image_to_string
 from qdrant_client import models
 
 from tools import QDRANT_COLLECTION, qdrant, upsert_knowledge_chunks
@@ -340,6 +342,32 @@ def extract_pdf_chunks(path: Path, document_hash: str) -> list[dict]:
                 source_path,
                 exc_info=True,
             )
+            page_text = ""
+
+        if not page_text.strip():
+            try:
+                image = convert_from_path(
+                    str(path),
+                    first_page=page_index,
+                    last_page=page_index,
+                    dpi=200,
+                )[0]
+                page_text = image_to_string(image) or ""
+                if page_text.strip():
+                    logger.info(
+                        "OCR extracted text from page %s of %s",
+                        page_index,
+                        source_path,
+                    )
+            except Exception:
+                logger.warning(
+                    "OCR failed for page %s of %s",
+                    page_index,
+                    source_path,
+                    exc_info=True,
+                )
+
+        if not page_text:
             continue
 
         for page_chunk_index, text in enumerate(chunk_text(page_text)):

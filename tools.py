@@ -196,7 +196,14 @@ async def search_knowledge_base(
                 "query": query,
                 "provider": provider or None,
                 "results": [],
-                "message": "No matching knowledge-base content was found.",
+                "message": (
+                    "No matching knowledge-base content was found. The local "
+                    "knowledge base only contains Princess Cruises and Royal "
+                    "Caribbean material. If the user's question is about Princess "
+                    "Cruises or Royal Caribbean, you MUST now call `search_web` to "
+                    "find the answer from public sources. Do not end the turn with "
+                    "'not found' until you have searched the web."
+                ),
             }
         )
 
